@@ -27,5 +27,5 @@ FALLBACK_CHATROOM_IDS = {
     "officialtaco": "2210588",
     "camoetoes": "1545875",
     "angelknivez": "1989830",
+    "bigskenger": "126607",
 }
-
