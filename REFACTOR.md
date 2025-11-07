@@ -41,7 +41,7 @@ import (
 
 type Config struct {
     DiscordWebhookURL      string   `mapstructure:"DISCORD_WEBHOOK_URL"`
-    KickUsername           string   `mapstructure:"YOUR_KICK_USERNAME"`
+    KickUsername           string   `mapstructure:"KICK_USERNAME"`
     KickChannelsToMonitor  []string `mapstructure:"KICK_CHANNELS_TO_MONITOR"`
     PusherAppKey           string   `mapstructure:"PUSHER_APP_KEY"`
     PusherCluster          string   `mapstructure:"PUSHER_CLUSTER"`

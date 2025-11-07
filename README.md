@@ -74,7 +74,7 @@ docker run stream-monitor
 2. Edit `config.py` with your settings:
    ```python
    # Your Kick username
-   YOUR_KICK_USERNAME = "your_username"
+   KICK_USERNAME = "your_username"
 
    # Channels to monitor
    KICK_CHANNELS_TO_MONITOR = ["channel1", "channel2"]
@@ -128,7 +128,7 @@ Press Ctrl+C to stop
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `YOUR_KICK_USERNAME` | string | Your Kick username to monitor for mentions |
+| `KICK_USERNAME` | string | Your Kick username to monitor for mentions |
 | `KICK_CHANNELS_TO_MONITOR` | list | List of Kick channels to monitor |
 | `PUSHER_APP_KEY` | string | Pusher app key for WebSocket connection |
 | `PUSHER_CLUSTER` | string | Pusher cluster (usually "us2") |

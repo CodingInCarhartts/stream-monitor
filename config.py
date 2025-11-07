@@ -2,8 +2,17 @@
 Centralized configuration for the stream monitor
 """
 import os
+from dotenv import load_dotenv
 
-from secrets import DISCORD_WEBHOOK_URL, YOUR_KICK_USERNAME, PUSHER_APP_KEY, PUSHER_CLUSTER
+load_dotenv()
+
+KICK_USERNAME = os.getenv('KICK_USERNAME')
+PUSHER_APP_KEY = os.getenv('PUSHER_APP_KEY')
+PUSHER_CLUSTER = os.getenv('PUSHER_CLUSTER')
+
+DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_ANON_KEY = os.getenv('SUPABASE_ANON_KEY')
 
 # Kick configuration
 KICK_CHANNELS_TO_MONITOR = ['zombiebarricades', 'lordkebun', 'skillspecs', 'taydoubleyou', 'hutchmf', 'ramee', 'sarah_loopz', 'karyn', 'gioso', 'binks', 'siglow', 'luiks', 'ayegavmf', 'officialtaco', 'camoetoes', 'angelknivez', 'bigskenger']

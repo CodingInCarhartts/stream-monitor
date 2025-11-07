@@ -5,60 +5,18 @@ import asyncio
 import websockets
 import json
 import aiohttp
-import re
 from config import (
-    YOUR_KICK_USERNAME,
+    KICK_USERNAME,
     KICK_CHANNELS_TO_MONITOR,
     PUSHER_APP_KEY,
     PUSHER_CLUSTER,
     KICK_USER_AGENT,
     FALLBACK_CHATROOM_IDS,
+    SUPABASE_URL,
+    SUPABASE_ANON_KEY,
 )
 from discord_notifier import send_to_discord
 
-async def get_emote_url(emote_name, emote_id, session):
-    """Get emote image URL, preferring 7TV by name, fallback to Kick by ID"""
-    # Try 7TV first via GraphQL
-    gql_query = f'{{ emotes(query: "{emote_name}", limit: 1, sort: {{ value: "popularity", order: DESCENDING }}) {{ items {{ id name host {{ url files {{ name }} }} }} }} }}'
-    try:
-        async with session.post('https://7tv.io/v3/gql', json={'query': gql_query}, timeout=aiohttp.ClientTimeout(total=5)) as response:
-            if response.status == 200:
-                data = await response.json()
-                items = data.get('data', {}).get('emotes', {}).get('items', [])
-                if items:
-                    emote = items[0]
-                    host = emote.get('host', {})
-                    if host:
-                        base_url = host.get('url', '')
-                        files = host.get('files', [])
-                        # Find 1x.webp
-                        for file in files:
-                            if file.get('name') == '1x.webp':
-                                url = base_url + '/' + file['name']
-                                if url.startswith('//'):
-                                    url = 'https:' + url
-                                return url
-                        # If not found, take first file
-                        if files:
-                            url = base_url + '/' + files[0]['name']
-                            if url.startswith('//'):
-                                url = 'https:' + url
-                            return url
-    except Exception:
-        pass
-    # Fallback to Kick
-    return f"https://files.kick.com/emotes/{emote_id}/fullsize.webp"
-
-async def process_emotes(message, session):
-    """Parse emote tags and return processed message with emote URLs"""
-    emote_urls = []
-    # Since re.sub doesn't support async, we need to process sequentially
-    emote_matches = re.findall(r'\[emote:(\d+):(\w+)\]', message)
-    processed_message = re.sub(r'\[emote:(\d+):(\w+)\]', r':\2:', message)
-    for emote_id, emote_name in emote_matches:
-        url = await get_emote_url(emote_name, emote_id, session)
-        emote_urls.append(url)
-    return processed_message, emote_urls
 
 # Configuration
 CHANNELS_TO_MONITOR = KICK_CHANNELS_TO_MONITOR
@@ -151,23 +109,23 @@ async def monitor_kick_channel(channel_name):
                             sender = msg_data.get('sender', {})
                             username = sender.get('username', '')
                             raw_message = str(msg_data.get('content', ''))
-                            message_text, emote_urls = await process_emotes(raw_message, session)
+                            message_text = raw_message
                             
                             # Skip your own messages
-                            if username.lower() == YOUR_KICK_USERNAME.lower():
+                            if username.lower() == KICK_USERNAME.lower():
                                 continue
                             
                             mentioned = False
                             is_reply = False
                             
                             # Check for mention
-                            if f'@{YOUR_KICK_USERNAME.lower()}' in message_text.lower():
+                            if f'@{KICK_USERNAME.lower()}' in message_text.lower():
                                 mentioned = True
                             
                             # Check if it's a reply to you
                             if msg_data.get('type') == 'reply':
                                 original_sender = msg_data.get('metadata', {}).get('original_sender', {})
-                                if original_sender.get('username', '').lower() == YOUR_KICK_USERNAME.lower():
+                                if original_sender.get('username', '').lower() == KICK_USERNAME.lower():
                                     is_reply = True
                             
                             if mentioned or is_reply:
@@ -180,8 +138,7 @@ async def monitor_kick_channel(channel_name):
                                     'username': username,
                                     'message': message_text,
                                     'timestamp': msg_data.get('created_at'),
-                                    'url': f'https://kick.com/{channel_name}',
-                                    'emote_urls': emote_urls
+                                    'url': f'https://kick.com/{channel_name}'
                                 }
 
                                 # Add original message for replies
@@ -191,15 +148,41 @@ async def monitor_kick_channel(channel_name):
                                         raw_original = raw_original.get('content', str(raw_original))
                                     else:
                                         raw_original = str(raw_original)
-                                    original_message, original_emotes = await process_emotes(raw_original, session)
-                                    if original_message:
-                                        notification_data['original_message'] = original_message
-                                        notification_data['original_emote_urls'] = original_emotes
+                                    if raw_original:
+                                        notification_data['original_message'] = raw_original
 
                                 # Check if send_to_discord is actually async
                                 result = send_to_discord(notification_data)
                                 if asyncio.iscoroutine(result):
                                     await result
+
+                                # Save to database
+                                try:
+                                    async with aiohttp.ClientSession() as db_session:
+                                        async with db_session.post(
+                                            f"{SUPABASE_URL}/rest/v1/kick_notifications",
+                                            json={
+                                                "platform": notification_data["platform"],
+                                                "type": notification_data["type"],
+                                                "channel": notification_data["channel"],
+                                                "username": notification_data["username"],
+                                                "message": notification_data["message"],
+                                                "timestamp": notification_data.get("timestamp"),
+                                                "url": notification_data["url"],
+                                                "original_message": notification_data.get("original_message")
+                                            },
+                                            headers={
+                                                "apikey": SUPABASE_ANON_KEY,
+                                                "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                                                "Content-Type": "application/json"
+                                            }
+                                        ) as response:
+                                            if response.status == 201:
+                                                print("Notification saved to database")
+                                            else:
+                                                print(f"Failed to save: {response.status} - {await response.text()}")
+                                except Exception as e:
+                                    print(f'Error saving to database: {e}')
 
                                 print(f'[Kick] {notification_type} from {username} in {channel_name}')
                     except json.JSONDecodeError:

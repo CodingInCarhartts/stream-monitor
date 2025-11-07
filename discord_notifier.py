@@ -57,12 +57,7 @@ async def send_to_discord(data):
             'inline': False
         })
 
-    # Add emote image if present
-    emote_urls = data.get('emote_urls', [])
-    if not emote_urls and 'original_emote_urls' in data:
-        emote_urls = data['original_emote_urls']
-    if emote_urls:
-        embed['image'] = {'url': emote_urls[0]}  # Use first emote as image
+
 
     # Add other fields
     embed['fields'].extend([
