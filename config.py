@@ -6,7 +6,7 @@ import os
 from secrets import DISCORD_WEBHOOK_URL, YOUR_KICK_USERNAME, PUSHER_APP_KEY, PUSHER_CLUSTER
 
 # Kick configuration
-KICK_CHANNELS_TO_MONITOR = ['zombiebarricades', 'lordkebun', 'skillspecs', 'taydoubleyou', 'hutchmf', 'ramee', 'sarah_loopz', 'karyn', 'gioso', 'binks', 'siglow', 'luiks', 'ayegavmf', 'officialtaco', 'camoetoes', 'angelknivez']
+KICK_CHANNELS_TO_MONITOR = ['zombiebarricades', 'lordkebun', 'skillspecs', 'taydoubleyou', 'hutchmf', 'ramee', 'sarah_loopz', 'karyn', 'gioso', 'binks', 'siglow', 'luiks', 'ayegavmf', 'officialtaco', 'camoetoes', 'angelknivez', 'bigskenger']
 KICK_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36"
 
 # Fallback chatroom IDs if API fails
