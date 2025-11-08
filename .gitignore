@@ -3,3 +3,4 @@ secrets.py
 .env
 find_chatroom_id.py
 remix-output.txt
+opencode.json
