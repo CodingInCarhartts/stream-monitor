@@ -1,5 +1,5 @@
 """
-Main Bot - Runs both Twitch and Kick monitors simultaneously
+Main Bot - Runs Kick monitor and FPS renewal bot simultaneously
 """
 import sys
 import os
@@ -8,10 +8,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 import asyncio
 import aiohttp
 from kick_monitor import run_kick_monitor, get_chatroom_id
+from fps_renewal_bot import run_renewal_bot
 from config import KICK_CHANNELS_TO_MONITOR
 
 async def main():
-    """Run the Kick monitor"""
+    """Run the Kick monitor and renewal bot"""
     # Dynamically generate chatroom IDs
     chatroom_ids = {}
     async with aiohttp.ClientSession() as session:
@@ -26,11 +27,14 @@ async def main():
         print(f'\t"{channel}": "{id}",')
     print('}')
 
-    print('Starting Kick chat monitor...')
+    print('Starting Kick chat monitor and FPS renewal bot...')
     print('Press Ctrl+C to stop\n')
-    
-    # Run the monitor
-    await run_kick_monitor()
+
+    # Run both concurrently
+    await asyncio.gather(
+        run_kick_monitor(),
+        run_renewal_bot()
+    )
 
 if __name__ == '__main__':
     try:
