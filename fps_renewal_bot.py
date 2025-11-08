@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "expiration": "2025-11-09T13:25:48",
     "acknowledged": False,
     "message_id": None,
-    "renewal_url": "https:panel.fps.ms/server/acc5d845"
+    "renewal_url": "https://panel.fps.ms/server/acc5d845"
 }
 
 intents = discord.Intents.default()
@@ -65,6 +65,79 @@ def format_countdown():
     minutes, seconds = divmod(remainder, 60)
     return f"{days}d {hours}h {minutes}m {seconds}s"
 
+async def create_embed(config):
+    """Create a visually appealing embed for the renewal status"""
+    remaining = get_remaining()
+    
+    # Dynamic color based on time remaining
+    if remaining <= timedelta(0):
+        color = 0xFF0000  # Red for expired
+    elif remaining < timedelta(hours=12):
+        color = 0xFF6B00  # Orange for critical
+    elif remaining < timedelta(hours=24):
+        color = 0xFFD700  # Gold for warning
+    else:
+        color = 0x00FF00  # Green for good
+    
+    embed = discord.Embed(
+        title="🖥️ FPS Server Renewal Status",
+        description="Monitor your server expiration and renewal status",
+        color=color,
+        timestamp=datetime.now()
+    )
+    
+    # Format expiration time nicely
+    expiration = datetime.fromisoformat(config['expiration'])
+    formatted_expiration = expiration.strftime("%B %d, %Y at %I:%M %p")
+    
+    # Add fields with emojis
+    embed.add_field(
+        name="📅 Expiration Date",
+        value=f"`{formatted_expiration}`",
+        inline=False
+    )
+    
+    countdown = format_countdown()
+    embed.add_field(
+        name="⏳ Time Remaining",
+        value=f"**{countdown}**",
+        inline=True
+    )
+    
+    # Status indicator
+    if remaining <= timedelta(0):
+        status = "🔴 **EXPIRED**"
+    elif remaining < timedelta(hours=12):
+        status = "🟠 **CRITICAL**"
+    elif remaining < timedelta(hours=24):
+        status = "🟡 **WARNING**"
+    else:
+        status = "🟢 **ACTIVE**"
+    
+    embed.add_field(
+        name="Status",
+        value=status,
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🔗 Renewal Portal",
+        value=f"[Click here to renew your server]({config['renewal_url']})",
+        inline=False
+    )
+    
+    # Add footer with acknowledgment status
+    ack_status = "✅ Acknowledged" if config['acknowledged'] else "⏸️ Pending Acknowledgment"
+    embed.set_footer(
+        text=f"{ack_status} • Last Updated",
+        icon_url="https://cdn.discordapp.com/emojis/1234567890.png"  # Optional: Add your server icon
+    )
+    
+    # Optional: Add thumbnail (you can use your server logo)
+    # embed.set_thumbnail(url="YOUR_IMAGE_URL_HERE")
+    
+    return embed
+
 async def update_embed():
     config = load_config()
     if config['message_id'] is None:
@@ -73,10 +146,7 @@ async def update_embed():
     if channel:
         try:
             message = await channel.fetch_message(config['message_id'])
-            embed = discord.Embed(title="FPS Server Renewal Status", color=0x00ff00)
-            embed.add_field(name="Expiration Time", value=config['expiration'], inline=False)
-            embed.add_field(name="Time Remaining", value=format_countdown(), inline=False)
-            embed.add_field(name="Renewal Link", value=f"[Renew Server]({config['renewal_url']})", inline=False)
+            embed = await create_embed(config)
             remaining = get_remaining()
             view = RenewalView()
             if remaining < timedelta(hours=1) and remaining > timedelta(0):
@@ -107,10 +177,7 @@ async def on_ready():
         print(f"Channel: {channel}")
         if channel:
             try:
-                embed = discord.Embed(title="FPS Server Renewal Status", color=0x00ff00)
-                embed.add_field(name="Expiration Time", value=config['expiration'], inline=False)
-                embed.add_field(name="Time Remaining", value=format_countdown(), inline=False)
-                embed.add_field(name="Renewal Link", value=f"[Renew Server]({config['renewal_url']})", inline=False)
+                embed = await create_embed(config)
                 view = RenewalView()
                 message = await channel.send(embed=embed, view=view)
                 config['message_id'] = message.id
@@ -137,8 +204,7 @@ async def set_expire(interaction: discord.Interaction, time: str):
         await update_embed()
         await interaction.response.send_message(f"Expiration set to {time}", ephemeral=True)
     except ValueError:
-        await interaction.response.send_message("Invalid time format. Use ISO format: YYYY-MM-DDTHH:MM:SS",
-ephemeral=True)
+        await interaction.response.send_message("Invalid time format. Use ISO format: YYYY-MM-DDTHH:MM:SS", ephemeral=True)
 
 async def run_renewal_bot():
     if not TOKEN:
