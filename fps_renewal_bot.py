@@ -89,11 +89,11 @@ async def update_embed():
 async def countdown_task():
     await update_embed()
 
-@tasks.loop(hours=1)
+@tasks.loop(minutes=30)
 async def notification_task():
     remaining = get_remaining()
     config = load_config()
-    if remaining < timedelta(hours=1) and remaining > timedelta(0) and not config['acknowledged']:
+    if remaining < timedelta(hours=12) and remaining > timedelta(0) and not config['acknowledged']:
         user = bot.get_user(USER_ID)
         if user:
             await user.send(f"⚠️ Your FPS server expires soon! Time remaining: {format_countdown()}. Please renew at\n{config['renewal_url']} and acknowledge in the channel.")
@@ -128,6 +128,7 @@ async def set_expire(interaction: discord.Interaction, time: str):
         await interaction.response.send_message("Only the server owner can set expiration.", ephemeral=True)
         return
     try:
+        time = time.replace(' ', 'T')
         datetime.fromisoformat(time)
         config = load_config()
         config['expiration'] = time
