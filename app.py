@@ -30,10 +30,26 @@ async def main():
     print('Starting Kick chat monitor and FPS renewal bot...')
     print('Press Ctrl+C to stop\n')
 
-    # Run both concurrently
+    # Run both concurrently with error isolation
+    async def run_kick_with_error_handling():
+        try:
+            await run_kick_monitor()
+        except Exception as e:
+            print(f"Kick monitor crashed: {e}")
+            # Don't re-raise to prevent killing the other task
+
+    async def run_renewal_with_error_handling():
+        try:
+            await run_renewal_bot()
+        except Exception as e:
+            print(f"FPS renewal bot crashed: {e}")
+            # Don't re-raise to prevent killing the other task
+
+    # Run both concurrently with error isolation
     await asyncio.gather(
-        run_kick_monitor(),
-        run_renewal_bot()
+        run_kick_with_error_handling(),
+        run_renewal_with_error_handling(),
+        return_exceptions=True  # Don't crash if one task fails
     )
 
 if __name__ == '__main__':

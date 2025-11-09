@@ -24,6 +24,26 @@ CHANNELS_TO_MONITOR = KICK_CHANNELS_TO_MONITOR
 # Kick uses Pusher for WebSocket connections
 PUSHER_WS_URL = f'wss://ws-{PUSHER_CLUSTER}.pusher.com/app/{PUSHER_APP_KEY}?protocol=7&client=js&version=8.4.0-rc2'
 
+# Global session for database operations (reused across all notifications)
+_db_session = None
+
+async def get_db_session():
+    """Get or create the shared database session"""
+    global _db_session
+    if _db_session is None or _db_session.closed:
+        _db_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30),
+            connector=aiohttp.TCPConnector(limit=10, limit_per_host=5)
+        )
+    return _db_session
+
+async def close_db_session():
+    """Close the shared database session"""
+    global _db_session
+    if _db_session and not _db_session.closed:
+        await _db_session.close()
+        _db_session = None
+
 async def get_chatroom_id(channel_name, session):
     """Get the chatroom ID for a Kick channel"""
     url = f'https://kick.com/api/v2/channels/{channel_name}'
@@ -56,7 +76,13 @@ async def monitor_kick_channel(channel_name):
     
     while True:  # Reconnection loop
         try:
-            async with websockets.connect(PUSHER_WS_URL) as websocket:
+            # Add connection timeout and ping/pong handling
+            async with websockets.connect(
+                PUSHER_WS_URL,
+                ping_interval=30,  # Send ping every 30 seconds
+                ping_timeout=10,   # Wait 10 seconds for pong
+                close_timeout=5    # Close connection within 5 seconds
+            ) as websocket:
                 print(f'Connected to WebSocket for {channel_name}')
                 
                 # Wait for connection_established event
@@ -112,20 +138,20 @@ async def monitor_kick_channel(channel_name):
                             message_text = raw_message
                             
                             # Skip your own messages
-                            if username.lower() == KICK_USERNAME.lower():
+                            if KICK_USERNAME and username and username.lower() == KICK_USERNAME.lower():
                                 continue
-                            
+
                             mentioned = False
                             is_reply = False
-                            
+
                             # Check for mention
-                            if f'@{KICK_USERNAME.lower()}' in message_text.lower():
+                            if KICK_USERNAME and f'@{KICK_USERNAME.lower()}' in message_text.lower():
                                 mentioned = True
-                            
+
                             # Check if it's a reply to you
                             if msg_data.get('type') == 'reply':
                                 original_sender = msg_data.get('metadata', {}).get('original_sender', {})
-                                if original_sender.get('username', '').lower() == KICK_USERNAME.lower():
+                                if KICK_USERNAME and original_sender.get('username', '').lower() == KICK_USERNAME.lower():
                                     is_reply = True
                             
                             if mentioned or is_reply:
@@ -157,8 +183,9 @@ async def monitor_kick_channel(channel_name):
                                     await result
 
                                 # Save to database
-                                try:
-                                    async with aiohttp.ClientSession() as db_session:
+                                if SUPABASE_URL and SUPABASE_ANON_KEY:
+                                    try:
+                                        db_session = await get_db_session()
                                         async with db_session.post(
                                             f"{SUPABASE_URL}/rest/v1/kick_notifications",
                                             json={
@@ -172,7 +199,7 @@ async def monitor_kick_channel(channel_name):
                                                 "original_message": notification_data.get("original_message")
                                             },
                                             headers={
-                                                "apikey": SUPABASE_ANON_KEY,
+                                                "apikey": str(SUPABASE_ANON_KEY),
                                                 "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
                                                 "Content-Type": "application/json"
                                             }
@@ -181,8 +208,8 @@ async def monitor_kick_channel(channel_name):
                                                 print("Notification saved to database")
                                             else:
                                                 print(f"Failed to save: {response.status} - {await response.text()}")
-                                except Exception as e:
-                                    print(f'Error saving to database: {e}')
+                                    except Exception as e:
+                                        print(f'Error saving to database: {e}')
 
                                 print(f'[Kick] {notification_type} from {username} in {channel_name}')
                     except json.JSONDecodeError:
@@ -199,8 +226,21 @@ async def monitor_kick_channel(channel_name):
 
 async def run_kick_monitor():
     """Run monitors for all Kick channels"""
-    tasks = [monitor_kick_channel(channel) for channel in CHANNELS_TO_MONITOR]
-    await asyncio.gather(*tasks)
+    # Start heartbeat task to monitor system health
+    async def heartbeat():
+        while True:
+            print(f"[HEARTBEAT] Kick monitor active - monitoring {len(CHANNELS_TO_MONITOR)} channels")
+            await asyncio.sleep(3600)  # Log every hour
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+
+    try:
+        tasks = [monitor_kick_channel(channel) for channel in CHANNELS_TO_MONITOR]
+        await asyncio.gather(*tasks)
+    finally:
+        # Ensure database session is closed on shutdown
+        heartbeat_task.cancel()
+        await close_db_session()
 
 if __name__ == '__main__':
     asyncio.run(run_kick_monitor())
