@@ -161,12 +161,28 @@ async def countdown_task():
 
 @tasks.loop(minutes=30)
 async def notification_task():
-    remaining = get_remaining()
-    config = load_config()
-    if remaining < timedelta(hours=12) and remaining > timedelta(0) and not config['acknowledged']:
-        user = bot.get_user(USER_ID)
-        if user:
-            await user.send(f"⚠️ Your FPS server expires soon! Time remaining: {format_countdown()}. Please renew at\n{config['renewal_url']} and acknowledge in the channel.")
+    try:
+        remaining = get_remaining()
+        config = load_config()
+        if remaining < timedelta(hours=12) and remaining > timedelta(0) and not config['acknowledged']:
+            try:
+                user = await bot.fetch_user(USER_ID)
+            except Exception as e:
+                print(f"Failed to fetch user for DM: {e}")
+                return
+            if not user:
+                print("User not found in cache or via fetch_user")
+                return
+            if not config.get('dm_sent', False):
+                try:
+                    await user.send(f"⚠️ Your FPS server expires soon! Time remaining: {format_countdown()}. Please renew at\n{config['renewal_url']} and acknowledge in the channel.")
+                    config['dm_sent'] = True
+                    save_config(config)
+                    print("Sent FPS renewal DM notification")
+                except Exception as e:
+                    print(f"Failed to send DM notification: {e}")
+    except Exception as e:
+        print(f"notification_task error: {e}")
 
 @bot.event
 async def on_ready():

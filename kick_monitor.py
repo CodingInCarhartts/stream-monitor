@@ -236,7 +236,7 @@ async def run_kick_monitor():
 
     try:
         tasks = [monitor_kick_channel(channel) for channel in CHANNELS_TO_MONITOR]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
     finally:
         # Ensure database session is closed on shutdown
         heartbeat_task.cancel()
