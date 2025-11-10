@@ -17,10 +17,6 @@ from config import (
 )
 from discord_notifier import send_to_discord
 
-
-# Configuration
-CHANNELS_TO_MONITOR = KICK_CHANNELS_TO_MONITOR
-
 # Kick uses Pusher for WebSocket connections
 PUSHER_WS_URL = f'wss://ws-{PUSHER_CLUSTER}.pusher.com/app/{PUSHER_APP_KEY}?protocol=7&client=js&version=8.4.0-rc2'
 
@@ -229,13 +225,13 @@ async def run_kick_monitor():
     # Start heartbeat task to monitor system health
     async def heartbeat():
         while True:
-            print(f"[HEARTBEAT] Kick monitor active - monitoring {len(CHANNELS_TO_MONITOR)} channels")
+            print(f"[HEARTBEAT] Kick monitor active - monitoring {len(KICK_CHANNELS_TO_MONITOR)} channels")
             await asyncio.sleep(3600)  # Log every hour
 
     heartbeat_task = asyncio.create_task(heartbeat())
 
     try:
-        tasks = [monitor_kick_channel(channel) for channel in CHANNELS_TO_MONITOR]
+        tasks = [monitor_kick_channel(channel) for channel in KICK_CHANNELS_TO_MONITOR]
         await asyncio.gather(*tasks, return_exceptions=True)
     finally:
         # Ensure database session is closed on shutdown
