@@ -1,40 +1,59 @@
-"""
-Main Bot - Runs Kick monitor and FPS renewal bot simultaneously
-"""
 import asyncio
-import aiohttp
-from kick_monitor import run_kick_monitor, get_chatroom_id
+
+from core_models import Notification
+from settings import load_settings
+from kick_service import KickChannelRepository, KickWebSocketClient
+from discord_service import DiscordNotificationService
+from db_service import DatabaseNotificationService
 from fps_renewal_bot import run_renewal_bot
-from config import KICK_CHANNELS_TO_MONITOR
 
-async def main():
-    """Run the Kick monitor and renewal bot"""
-    # Dynamically generate chatroom IDs
-    chatroom_ids = {}
-    async with aiohttp.ClientSession() as session:
-        for channel in KICK_CHANNELS_TO_MONITOR:
-            chatroom_id = await get_chatroom_id(channel, session)
-            if chatroom_id:
-                chatroom_ids[channel] = str(chatroom_id)
 
-    # Print copyable Go map
-    print('var chatroomIDs = map[string]string{')
-    for channel, id in chatroom_ids.items():
-        print(f'\t"{channel}": "{id}",')
-    print('}')
+async def handle_notification(notification: Notification) -> None:
+    settings = load_settings()
+    discord_service = DiscordNotificationService(settings.discord)
+    db_service = DatabaseNotificationService(settings.database)
 
-    print('Starting Kick chat monitor and FPS renewal bot...')
-    print('Press Ctrl+C to stop\n')
+    await discord_service.send(notification)
+    await db_service.save(notification)
 
-    # Run both concurrently with error isolation
+    message = notification.message
+    print(
+        f"[{message.channel.platform}] {message.message_type} "
+        f"from {message.sender} in {message.channel.name}"
+    )
+
+
+async def run_kick_monitor() -> None:
+    settings = load_settings()
+    kick_repo = KickChannelRepository(settings.kick)
+    kick_ws = KickWebSocketClient(settings.kick)
+
+    channels = await kick_repo.get_monitored_channels()
+    if not channels:
+        print("No Kick channels configured to monitor")
+        return
+
+    print(f"Monitoring {len(channels)} Kick channels...")
+
+    tasks = [
+        kick_ws.listen_channel(channel, handle_notification)
+        for channel in channels
+    ]
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def main() -> None:
+    print("Starting Kick monitor and FPS renewal bot...")
     await asyncio.gather(
         run_kick_monitor(),
         run_renewal_bot(),
-        return_exceptions=True  # Don't crash if one task fails
+        return_exceptions=True,
     )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print('\nShutting down monitor...')
+        print("Shutting down monitor...")
