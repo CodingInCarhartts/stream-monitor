@@ -13,20 +13,6 @@ class DiscordNotificationService:
             "Twitch": 0x9146FF,
             "Kick": 0x53FC18,
         }
-        self._session: aiohttp.ClientSession | None = None
-
-    async def __aenter__(self):
-        """Initialize session when entering context."""
-        self._session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=10)
-        )
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Cleanup session when exiting context."""
-        if self._session:
-            await self._session.close()
-            self._session = None
 
     async def send(self, notification: Notification) -> None:
         embed = self._create_embed(notification)
@@ -35,20 +21,10 @@ class DiscordNotificationService:
         if not self.settings.webhook_url:
             return
 
-        if not self._session:
-            # Fallback if not used with context manager
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10)
-            )
-
-        try:
-            async with self._session.post(
-                self.settings.webhook_url, json=payload
-            ) as response:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.settings.webhook_url, json=payload) as response:
                 if response.status != 204:
                     print(f"Failed to send Discord notification: {response.status}")
-        except Exception as e:
-            print(f"Error sending Discord notification: {e}")
 
     def _create_embed(self, notification: Notification) -> Dict[str, Any]:
         message = notification.message
@@ -57,7 +33,6 @@ class DiscordNotificationService:
         fields = []
 
         if notification.original_message:
-            # Limit field size to prevent excessive memory usage
             fields.append(
                 {
                     "name": "Original Message",
