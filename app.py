@@ -8,39 +8,41 @@ from db_service import DatabaseNotificationService
 from fps_renewal_bot import run_renewal_bot
 
 
-async def handle_notification(notification: Notification) -> None:
-    settings = load_settings()
-    discord_service = DiscordNotificationService(settings.discord)
-    db_service = DatabaseNotificationService(settings.database)
-
-    await discord_service.send(notification)
-    await db_service.save(notification)
-
-    message = notification.message
-    print(
-        f"[{message.channel.platform}] {message.message_type} "
-        f"from {message.sender} in {message.channel.name}"
-    )
-
-
 async def run_kick_monitor() -> None:
     settings = load_settings()
+    
+    # Initialize services once for reuse
+    discord_service = DiscordNotificationService(settings.discord)
+    db_service = DatabaseNotificationService(settings.database)
     kick_repo = KickChannelRepository(settings.kick)
     kick_ws = KickWebSocketClient(settings.kick)
 
-    channels = await kick_repo.get_monitored_channels()
-    if not channels:
-        print("No Kick channels configured to monitor")
-        return
+    async def handle_notification(notification: Notification) -> None:
+        """Handle notifications using shared service instances."""
+        await discord_service.send(notification)
+        await db_service.save(notification)
 
-    print(f"Monitoring {len(channels)} Kick channels...")
+        message = notification.message
+        print(
+            f"[{message.channel.platform}] {message.message_type} "
+            f"from {message.sender} in {message.channel.name}"
+        )
 
-    tasks = [
-        kick_ws.listen_channel(channel, handle_notification)
-        for channel in channels
-    ]
+    # Use context manager for proper cleanup
+    async with discord_service, db_service, kick_repo:
+        channels = await kick_repo.get_monitored_channels()
+        if not channels:
+            print("No Kick channels configured to monitor")
+            return
 
-    await asyncio.gather(*tasks, return_exceptions=True)
+        print(f"Monitoring {len(channels)} Kick channels...")
+
+        tasks = [
+            kick_ws.listen_channel(channel, handle_notification)
+            for channel in channels
+        ]
+
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def main() -> None:
