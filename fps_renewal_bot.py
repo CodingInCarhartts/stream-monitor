@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
 }
 
 intents = discord.Intents.default()
+intents.message_content = True
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
@@ -76,6 +77,22 @@ def format_countdown():
     hours, remainder = divmod(remaining.seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{days}d {hours}h {minutes}m {seconds}s"
+
+
+async def set_expiration_time(time_str: str) -> tuple[bool, str]:
+    """Shared function to set expiration time. Returns (success, message)"""
+    try:
+        time_str = time_str.replace(" ", "T")
+        datetime.fromisoformat(time_str)
+        config = load_config()
+        config["expiration"] = time_str
+        config["acknowledged"] = False  # Reset acknowledgment
+        config["dm_sent"] = False  # Reset DM sent flag
+        save_config(config)
+        await update_embed()
+        return True, f"Expiration set to {time_str}"
+    except ValueError:
+        return False, "Invalid time format. Use ISO format: YYYY-MM-DDTHH:MM:SS"
 
 
 async def create_embed(config):
@@ -232,22 +249,37 @@ async def set_expire(interaction: discord.Interaction, time: str):
             "Only the server owner can set expiration.", ephemeral=True
         )
         return
-    try:
-        time = time.replace(" ", "T")
-        datetime.fromisoformat(time)
-        config = load_config()
-        config["expiration"] = time
-        config["acknowledged"] = False  # Reset acknowledgment
-        config["dm_sent"] = False  # Reset DM sent flag
-        save_config(config)
-        await update_embed()
-        await interaction.response.send_message(
-            f"Expiration set to {time}", ephemeral=True
-        )
-    except ValueError:
-        await interaction.response.send_message(
-            "Invalid time format. Use ISO format: YYYY-MM-DDTHH:MM:SS", ephemeral=True
-        )
+
+    success, message = await set_expiration_time(time)
+    await interaction.response.send_message(message, ephemeral=True)
+
+
+@bot.event
+async def on_message(message):
+    # Ignore messages from bots (including ourselves)
+    if message.author.bot:
+        return
+
+    # Only process messages from the specified user ID
+    if message.author.id != USER_ID:
+        return
+
+    # Check if message starts with "set-expire"
+    if message.content.lower().startswith("set-expire"):
+        # Extract the time parameter (everything after "set-expire")
+        parts = message.content.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply("Usage: set-expire YYYY-MM-DDTHH:MM:SS")
+            return
+
+        time_str = parts[1].strip()
+        success, response_message = await set_expiration_time(time_str)
+
+        # Send response
+        if success:
+            await message.reply(f"✅ {response_message}")
+        else:
+            await message.reply(f"❌ {response_message}")
 
 
 async def run_renewal_bot():
