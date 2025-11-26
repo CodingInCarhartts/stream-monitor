@@ -217,6 +217,23 @@ async def notification_task():
         print(f"notification_task error: {e}")
 
 
+@tasks.loop(minutes=5)
+async def cleanup_task():
+    config = load_config()
+    if config["message_id"] is None:
+        return
+    channel = bot.get_channel(CHANNEL_ID)
+    if not channel:
+        return
+    try:
+        messages = [msg async for msg in channel.history(limit=100)]
+        for msg in messages:
+            if msg.id != config["message_id"]:
+                await msg.delete()
+    except Exception as e:
+        print(f"Cleanup error: {e}")
+
+
 @bot.event
 async def on_ready():
     await tree.sync()
@@ -236,6 +253,7 @@ async def on_ready():
                 print(f"Failed to send message: {e}")
     countdown_task.start()
     notification_task.start()
+    cleanup_task.start()
     print(f"FPS Renewal Bot is ready. Logged in as {bot.user}")
 
 
@@ -280,6 +298,7 @@ async def on_message(message):
             await message.reply(f"✅ {response_message}")
         else:
             await message.reply(f"❌ {response_message}")
+        await message.delete()
 
 
 async def run_renewal_bot():
