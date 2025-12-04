@@ -1,13 +1,20 @@
 import asyncio
+import gc
 import json
 from datetime import datetime
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
+from collections import deque
 
 import aiohttp
 import websockets
 
 from core_models import Channel, Message, Notification
 from settings import KickSettings
+from resource_manager import (
+    CircuitBreaker,
+    BoundedMessageQueue,
+    WebSocketConnectionManager,
+)
 
 
 class KickChannelRepository:
@@ -49,36 +56,46 @@ class KickWebSocketClient:
             f"wss://ws-{settings.pusher_cluster}.pusher.com/app/{settings.pusher_app_key}"
             "?protocol=7&client=js&version=8.4.0-rc2"
         )
+        # Resource management utilities - limit reconnections to prevent resource bloat
+        self.ws_manager = WebSocketConnectionManager(max_reconnect_attempts=5)
+        # Bounded message queue to prevent memory accumulation
+        self.message_queue: dict[str, BoundedMessageQueue] = {}
 
     async def listen_channel(
         self,
         channel: Channel,
         handler: Callable[[Notification], Awaitable[None]],
     ) -> None:
+        """Listen to channel with proper resource cleanup and error handling"""
         pusher_channel = f"chatrooms.{channel.id}.v2"
+        
+        # Initialize bounded queue for this channel
+        self.message_queue[channel.name] = BoundedMessageQueue(maxlen=500)
 
-        while True:
+        async def connection_handler(websocket: websockets.WebSocketClientProtocol) -> None:
+            """Handle WebSocket connection with timeout protection"""
             try:
-                async with websockets.connect(
-                    self.ws_url,
-                    ping_interval=30,
-                    ping_timeout=10,
-                    close_timeout=5,
-                ) as websocket:
-                    print(f"Connected to WebSocket for {channel.name}")
-                    await self._run_loop(websocket, channel, pusher_channel, handler)
-            except websockets.exceptions.ConnectionClosed:
-                print(
-                    f"WebSocket connection closed for {channel.name}, "
-                    "reconnecting in 5 seconds...",
+                await self._run_loop(
+                    websocket, channel, pusher_channel, handler
                 )
-                await asyncio.sleep(5)
+            except asyncio.TimeoutError:
+                print(f"Connection handler timeout for {channel.name}")
+                raise
             except Exception as e:
-                print(
-                    f"Error in WebSocket connection for {channel.name}: {e}. "
-                    "Reconnecting in 5 seconds...",
-                )
-                await asyncio.sleep(5)
+                print(f"Error in connection handler for {channel.name}: {e}")
+                raise
+
+        try:
+            await self.ws_manager.connect_with_retry(
+                self.ws_url,
+                connection_handler,
+                initial_backoff=1.0,
+                max_backoff=60.0,
+            )
+        finally:
+            # Cleanup resources for this channel only
+            if channel.name in self.message_queue:
+                await self.message_queue[channel.name].clear()
 
     async def _run_loop(
         self,
@@ -110,9 +127,7 @@ class KickWebSocketClient:
                 continue
 
             if event == "pusher:ping":
-                await websocket.send(
-                    json.dumps({"event": "pusher:pong", "data": {}})
-                )
+                await websocket.send(json.dumps({"event": "pusher:pong", "data": {}}))
                 continue
 
             if event == "pusher_internal:subscription_succeeded":
@@ -135,6 +150,7 @@ class KickWebSocketClient:
         channel: Channel,
         handler: Callable[[Notification], Awaitable[None]],
     ) -> None:
+        """Handle chat message with strict timeout to prevent memory accumulation"""
         try:
             msg_data = json.loads(envelope.get("data", "{}"))
         except json.JSONDecodeError:
@@ -168,9 +184,7 @@ class KickWebSocketClient:
 
         original_message = None
         if message_type == "Reply":
-            raw_original = msg_data.get("metadata", {}).get(
-                "original_message", ""
-            )
+            raw_original = msg_data.get("metadata", {}).get("original_message", "")
             if isinstance(raw_original, dict):
                 raw_original = raw_original.get("content", str(raw_original))
             original_message = str(raw_original) if raw_original else None
@@ -181,7 +195,16 @@ class KickWebSocketClient:
             url=f"https://kick.com/{channel.name}",
         )
 
-        await handler(notification)
+        try:
+            # Strict timeout: skip message if handler takes too long
+            await asyncio.wait_for(handler(notification), timeout=5.0)
+        except asyncio.TimeoutError:
+            print(f"Handler timeout for {username} in {channel.name}")
+        except Exception as e:
+            print(f"Error handling message in {channel.name}: {e}")
+        finally:
+            # Aggressive garbage collection to prevent memory accumulation
+            gc.collect()
 
     def _get_message_type(self, msg_data: dict, content: str) -> str | None:
         if (
@@ -191,9 +214,7 @@ class KickWebSocketClient:
             return "Mention"
 
         if msg_data.get("type") == "reply":
-            original_sender = msg_data.get("metadata", {}).get(
-                "original_sender", {}
-            )
+            original_sender = msg_data.get("metadata", {}).get("original_sender", {})
             if (
                 self.settings.username
                 and str(original_sender.get("username", "")).lower()

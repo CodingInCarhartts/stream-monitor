@@ -4,6 +4,7 @@ from discord.ext import tasks
 import json
 import os
 from datetime import datetime, timedelta
+from collections import deque
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,6 +13,10 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", 1436505351930384434))
 USER_ID = int(os.getenv("DISCORD_USER_ID", 499288461472432148))
 CONFIG_FILE = "fps_config.json"
+
+# Limit the size of message cache to prevent memory leaks
+MESSAGE_CACHE_SIZE = 100
+message_cache = deque(maxlen=MESSAGE_CACHE_SIZE)
 
 # Default config
 DEFAULT_CONFIG = {
@@ -23,7 +28,9 @@ DEFAULT_CONFIG = {
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = discord.Client(intents=intents)
+# Disable message cache to prevent memory bloat - we only manage one message
+intents.members = False
+bot = discord.Client(intents=intents, max_messages=0)
 tree = app_commands.CommandTree(bot)
 
 
@@ -217,21 +224,25 @@ async def notification_task():
         print(f"notification_task error: {e}")
 
 
-@tasks.loop(minutes=5)
-async def cleanup_task():
-    config = load_config()
-    if config["message_id"] is None:
-        return
-    channel = bot.get_channel(CHANNEL_ID)
-    if not channel:
-        return
-    try:
-        messages = [msg async for msg in channel.history(limit=100)]
-        for msg in messages:
-            if msg.id != config["message_id"]:
-                await msg.delete()
-    except Exception as e:
-        print(f"Cleanup error: {e}")
+# Cleanup task disabled - history scanning causes memory spikes
+# @tasks.loop(minutes=30)
+# async def cleanup_task():
+#     config = load_config()
+#     if config["message_id"] is None:
+#         return
+#     channel = bot.get_channel(CHANNEL_ID)
+#     if not channel:
+#         return
+#     try:
+#         target_id = config["message_id"]
+#         async for msg in channel.history(limit=50):
+#             if msg.id != target_id and msg.author == bot.user:
+#                 try:
+#                     await msg.delete()
+#                 except Exception:
+#                     pass
+#     except Exception as e:
+#         print(f"Cleanup error: {e}")
 
 
 @bot.event
@@ -253,7 +264,7 @@ async def on_ready():
                 print(f"Failed to send message: {e}")
     countdown_task.start()
     notification_task.start()
-    cleanup_task.start()
+    # cleanup_task.start()  # Disabled - causes memory spikes
     print(f"FPS Renewal Bot is ready. Logged in as {bot.user}")
 
 
@@ -298,7 +309,6 @@ async def on_message(message):
             await message.reply(f"✅ {response_message}")
         else:
             await message.reply(f"❌ {response_message}")
-        await message.delete()
 
 
 async def run_renewal_bot():
