@@ -1,257 +1,272 @@
 """
-Kick Chat Monitor - Detects mentions and replies using Pusher WebSocket
+Kick Chat Monitor - Minimal memory footprint
+Monitors Kick chat channels for mentions and replies via Pusher WebSocket.
 """
 
 import asyncio
-import websockets
 import json
+from typing import Optional
+
 import aiohttp
-import time
-from collections import deque
-from settings import load_settings
-from discord_service import DiscordNotificationService
-from db_service import DatabaseNotificationService
+import websockets
+from websockets.exceptions import ConnectionClosed
 
 
-# Configuration
-CHANNELS_TO_MONITOR = KICK_CHANNELS_TO_MONITOR
-
-# Kick uses Pusher for WebSocket connections
-PUSHER_WS_URL = f"wss://ws-{PUSHER_CLUSTER}.pusher.com/app/{PUSHER_APP_KEY}?protocol=7&client=js&version=8.4.0-rc2"
-
-
-async def process_chat_message(data, channel_name):
-    """Process a chat message with proper error handling"""
-    msg_data = json.loads(data.get("data", "{}"))
-
-    # Handle the new structure
-    sender = msg_data.get("sender", {})
-    username = sender.get("username", "")
-    raw_message = str(msg_data.get("content", ""))
-    message_text = raw_message
-
-    # Skip your own messages
-    if username.lower() == KICK_USERNAME.lower():
-        return
-
-    mentioned = False
-    is_reply = False
-
-    # Check for mention
-    if f"@{KICK_USERNAME.lower()}" in message_text.lower():
-        mentioned = True
-
-    # Check if it's a reply to you
-    if msg_data.get("type") == "reply":
-        original_sender = msg_data.get("metadata", {}).get("original_sender", {})
-        if original_sender.get("username", "").lower() == KICK_USERNAME.lower():
-            is_reply = True
-
-    if mentioned or is_reply:
-        notification_type = "Reply" if is_reply else "Mention"
-
-        notification_data = {
-            "platform": "Kick",
-            "type": notification_type,
-            "channel": channel_name,
-            "username": username,
-            "message": message_text,
-            "timestamp": msg_data.get("created_at"),
-            "url": f"https://kick.com/{channel_name}",
-        }
-
-        # Add original message for replies
-        if is_reply:
-            raw_original = msg_data.get("metadata", {}).get("original_message", "")
-            if isinstance(raw_original, dict):
-                raw_original = raw_original.get("content", str(raw_original))
-            else:
-                raw_original = str(raw_original)
-            if raw_original:
-                notification_data["original_message"] = raw_original
-
-        # Check if send_to_discord is actually async
-        result = send_to_discord(notification_data)
-        if asyncio.iscoroutine(result):
-            await result
-
-        # Save to database
-        try:
-            async with aiohttp.ClientSession() as db_session:
-                async with db_session.post(
-                    f"{SUPABASE_URL}/rest/v1/kick_notifications",
-                    json={
-                        "platform": notification_data["platform"],
-                        "type": notification_data["type"],
-                        "channel": notification_data["channel"],
-                        "username": notification_data["username"],
-                        "message": notification_data["message"],
-                        "timestamp": notification_data.get("timestamp"),
-                        "url": notification_data["url"],
-                        "original_message": notification_data.get("original_message"),
-                    },
-                    headers={
-                        "apikey": SUPABASE_ANON_KEY,
-                        "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                ) as response:
-                    if response.status == 201:
-                        print("Notification saved to database")
-                    else:
-                        print(
-                            f"Failed to save: {response.status} - {await response.text()}"
-                        )
-        except Exception as e:
-            print(f"Error saving to database: {e}")
-
-        print(f"[Kick] {notification_type} from {username} in {channel_name}")
-
-
-async def get_chatroom_id(channel_name, session):
-    """Get the chatroom ID for a Kick channel"""
-    url = f"https://kick.com/api/v2/channels/{channel_name}"
-    headers = {"User-Agent": KICK_USER_AGENT}
+async def get_chatroom_id(
+    session: aiohttp.ClientSession,
+    channel: str,
+    user_agent: str,
+    fallbacks: dict[str, str],
+) -> Optional[str]:
+    """Get chatroom ID from Kick API with fallback."""
     try:
         async with session.get(
-            url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
-        ) as response:
-            if response.status == 200:
-                data = await response.json()
-                return data.get("chatroom", {}).get("id")
+            f"https://kick.com/api/v2/channels/{channel}",
+            headers={"User-Agent": user_agent},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return str(data.get("chatroom", {}).get("id"))
     except Exception as e:
-        print(f"Error getting chatroom ID for {channel_name}: {e}")
-    # Fallback to hardcoded IDs if API fails
-    fallback_id = FALLBACK_CHATROOM_IDS.get(channel_name)
-    if fallback_id:
-        print(f"Using fallback chatroom ID for {channel_name}: {fallback_id}")
-        return fallback_id
-    return None
+        print(f"API error for {channel}: {e}")
+    
+    # Use fallback if available
+    fallback = fallbacks.get(channel)
+    if fallback:
+        print(f"Using fallback ID for {channel}: {fallback}")
+    return fallback
 
 
-async def monitor_kick_channel(channel_name):
-    """Monitor a single Kick channel for mentions and replies"""
-    async with aiohttp.ClientSession() as session:
-        chatroom_id = await get_chatroom_id(channel_name, session)
-        if not chatroom_id:
-            print(f"Could not get chatroom ID for {channel_name}")
-            return
+async def send_discord_webhook(
+    session: aiohttp.ClientSession,
+    webhook_url: str,
+    embed: dict,
+) -> None:
+    """Send embed to Discord webhook - fire and forget."""
+    if not webhook_url:
+        return
+    try:
+        async with session.post(
+            webhook_url,
+            json={"embeds": [embed]},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status not in (200, 204):
+                print(f"Discord webhook error: {resp.status}")
+    except Exception as e:
+        print(f"Discord error: {e}")
 
-    channel = f"chatrooms.{chatroom_id}.v2"
 
-    # Exponential backoff variables
-    backoff_delay = 1.0  # Start with 1 second
-    max_backoff = 60.0  # Maximum 60 seconds
-    last_activity = time.time()
+async def save_to_supabase(
+    session: aiohttp.ClientSession,
+    url: str,
+    key: str,
+    data: dict,
+) -> None:
+    """Save notification to Supabase - fire and forget."""
+    if not url or not key:
+        return
+    try:
+        async with session.post(
+            f"{url}/rest/v1/kick_notifications",
+            json=data,
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status != 201:
+                print(f"Supabase error: {resp.status}")
+    except Exception as e:
+        print(f"Supabase error: {e}")
 
-    while True:  # Reconnection loop
+
+async def monitor_channel(
+    session: aiohttp.ClientSession,
+    channel_name: str,
+    chatroom_id: str,
+    target_username: str,
+    webhook_url: str,
+    pusher_url: str,
+    supabase_url: Optional[str] = None,
+    supabase_key: Optional[str] = None,
+) -> None:
+    """
+    Monitor a single Kick channel for mentions and replies.
+    Reconnects automatically on disconnect.
+    """
+    pusher_channel = f"chatrooms.{chatroom_id}.v2"
+    target_lower = target_username.lower()
+    
+    while True:
         try:
-            # Connect with timeouts to prevent hanging
             async with websockets.connect(
-                PUSHER_WS_URL,
-                ping_interval=30,  # Send ping every 30 seconds
-                ping_timeout=10,  # Wait 10 seconds for pong
-                close_timeout=5,  # Close connection within 5 seconds
-            ) as websocket:
-                print(f"Connected to WebSocket for {channel_name}")
-
-                # Wait for connection_established event
-                connection_established = False
-
-                async for message in websocket:
+                pusher_url,
+                ping_interval=30,
+                ping_timeout=10,
+                close_timeout=5,
+            ) as ws:
+                print(f"Connected: {channel_name}")
+                subscribed = False
+                
+                async for raw in ws:
                     try:
-                        # Update last activity timestamp for health monitoring
-                        last_activity = time.time()
-
-                        data = json.loads(message)
-                        # Handle connection established
-                        if data.get("event") == "pusher:connection_established":
-                            print(f"Connection established for {channel_name}")
-                            connection_established = True
-
-                            # Now subscribe to the channel
-                            subscribe_message = {
-                                "event": "pusher:subscribe",
-                                "data": {"channel": channel},
-                            }
-                            await websocket.send(json.dumps(subscribe_message))
-                            print(
-                                f"Subscribed to Kick channel: {channel_name} (chatroom {chatroom_id})"
-                            )
-                            continue
-
-                        # Handle ping/pong
-                        if data.get("event") == "pusher:ping":
-                            await websocket.send(
-                                json.dumps({"event": "pusher:pong", "data": {}})
-                            )
-                            continue
-
-                        # Check for subscription success
-                        if (
-                            data.get("event")
-                            == "pusher_internal:subscription_succeeded"
-                        ):
-                            print(f"Successfully subscribed to {channel_name}")
-                            continue
-
-                        # Check for errors
-                        if data.get("event") == "pusher:error":
-                            error_data = data.get("data", {})
-                            print(f"Pusher error for {channel_name}: {error_data}")
-                            continue
-
-                        # Only process messages after connection is established
-                        if not connection_established:
-                            continue
-
-                        # Check for chat messages
-                        if data.get("event") == "App\\Events\\ChatMessageEvent":
-                            # Process message with timeout to prevent buffer accumulation
-                            try:
-                                await asyncio.wait_for(
-                                    process_chat_message(data, channel_name),
-                                    timeout=10.0,  # 10 second timeout for message processing
-                                )
-                            except asyncio.TimeoutError:
-                                print(
-                                    f"Message processing timed out for {channel_name}, skipping to prevent buffer accumulation"
-                                )
-                                continue
+                        data = json.loads(raw)
                     except json.JSONDecodeError:
                         continue
-                    except Exception as e:
-                        print(f"Error processing Kick message: {e}")
-
-                    # Health check: force reconnection if no activity for 5 minutes
-                    if time.time() - last_activity > 300:  # 5 minutes
-                        print(
-                            f"No activity for 5 minutes on {channel_name}, forcing reconnection..."
-                        )
-                        break
-
-        except websockets.exceptions.ConnectionClosed:
-            print(
-                f"WebSocket connection closed for {channel_name}, reconnecting in {backoff_delay:.1f} seconds..."
-            )
-            await asyncio.sleep(backoff_delay)
-            backoff_delay = min(backoff_delay * 2, max_backoff)  # Exponential backoff
+                    
+                    event = data.get("event")
+                    
+                    # Handle Pusher protocol
+                    if event == "pusher:connection_established":
+                        await ws.send(json.dumps({
+                            "event": "pusher:subscribe",
+                            "data": {"channel": pusher_channel},
+                        }))
+                        continue
+                    
+                    if event == "pusher_internal:subscription_succeeded":
+                        subscribed = True
+                        print(f"Subscribed to {channel_name} ({chatroom_id})")
+                        continue
+                    
+                    if event == "pusher:ping":
+                        await ws.send(json.dumps({"event": "pusher:pong", "data": {}}))
+                        continue
+                    
+                    if event == "pusher:error":
+                        print(f"Pusher error for {channel_name}: {data.get('data')}")
+                        continue
+                    
+                    # Only process chat messages after subscribed
+                    if not subscribed:
+                        continue
+                    
+                    if event == "App\\Events\\ChatMessageEvent":
+                        # Process message inline - minimal overhead
+                        try:
+                            msg = json.loads(data.get("data", "{}"))
+                        except json.JSONDecodeError:
+                            continue
+                        
+                        username = msg.get("sender", {}).get("username", "")
+                        content = str(msg.get("content", ""))
+                        
+                        # Skip own messages
+                        if username.lower() == target_lower:
+                            continue
+                        
+                        # Check for mention
+                        is_mention = f"@{target_lower}" in content.lower()
+                        
+                        # Check for reply to us
+                        is_reply = False
+                        if msg.get("type") == "reply":
+                            original_sender = msg.get("metadata", {}).get("original_sender", {})
+                            if original_sender.get("username", "").lower() == target_lower:
+                                is_reply = True
+                        
+                        if not (is_mention or is_reply):
+                            continue
+                        
+                        notification_type = "Reply" if is_reply else "Mention"
+                        timestamp = msg.get("created_at", "")
+                        
+                        # Create Discord embed
+                        embed = {
+                            "title": f"{notification_type} on Kick",
+                            "description": f"**{username}** in **{channel_name}**",
+                            "color": 0x53FC18,  # Kick green
+                            "fields": [
+                                {"name": "Message", "value": content[:1024], "inline": False}
+                            ],
+                            "url": f"https://kick.com/{channel_name}",
+                        }
+                        
+                        # Add original message for replies
+                        if is_reply:
+                            original = msg.get("metadata", {}).get("original_message", "")
+                            if isinstance(original, dict):
+                                original = original.get("content", str(original))
+                            if original:
+                                embed["fields"].insert(0, {
+                                    "name": "Original Message",
+                                    "value": str(original)[:1024],
+                                    "inline": False,
+                                })
+                        
+                        # Fire and forget - don't wait
+                        asyncio.create_task(send_discord_webhook(session, webhook_url, embed))
+                        
+                        # Optionally save to Supabase
+                        if supabase_url and supabase_key:
+                            db_data = {
+                                "platform": "Kick",
+                                "type": notification_type,
+                                "channel": channel_name,
+                                "username": username,
+                                "message": content,
+                                "timestamp": timestamp,
+                                "url": f"https://kick.com/{channel_name}",
+                            }
+                            asyncio.create_task(save_to_supabase(session, supabase_url, supabase_key, db_data))
+                        
+                        print(f"[Kick] {notification_type} from {username} in {channel_name}")
+                        
+        except ConnectionClosed:
+            print(f"WebSocket closed for {channel_name}, reconnecting...")
         except Exception as e:
-            print(
-                f"Error in WebSocket connection for {channel_name}: {e}, reconnecting in {backoff_delay:.1f} seconds..."
+            print(f"Error for {channel_name}: {e}")
+        
+        # Wait before reconnecting
+        await asyncio.sleep(5)
+
+
+async def start_monitoring(
+    session: aiohttp.ClientSession,
+    channels: list[str],
+    fallback_ids: dict[str, str],
+    target_username: str,
+    webhook_url: str,
+    pusher_app_key: str,
+    pusher_cluster: str,
+    user_agent: str,
+    supabase_url: Optional[str] = None,
+    supabase_key: Optional[str] = None,
+) -> None:
+    """Start monitoring all channels."""
+    pusher_url = (
+        f"wss://ws-{pusher_cluster}.pusher.com/app/{pusher_app_key}"
+        "?protocol=7&client=js&version=8.4.0-rc2"
+    )
+    
+    # Get chatroom IDs for all channels
+    tasks = []
+    for channel in channels:
+        chatroom_id = await get_chatroom_id(session, channel, user_agent, fallback_ids)
+        if chatroom_id:
+            task = asyncio.create_task(
+                monitor_channel(
+                    session=session,
+                    channel_name=channel,
+                    chatroom_id=chatroom_id,
+                    target_username=target_username,
+                    webhook_url=webhook_url,
+                    pusher_url=pusher_url,
+                    supabase_url=supabase_url,
+                    supabase_key=supabase_key,
+                )
             )
-            await asyncio.sleep(backoff_delay)
-            backoff_delay = min(backoff_delay * 2, max_backoff)  # Exponential backoff
+            tasks.append(task)
         else:
-            # Successful connection, reset backoff
-            backoff_delay = 1.0
-
-
-async def run_kick_monitor():
-    """Run monitors for all Kick channels"""
-    tasks = [monitor_kick_channel(channel) for channel in CHANNELS_TO_MONITOR]
-    await asyncio.gather(*tasks)
-
-
-if __name__ == "__main__":
-    asyncio.run(run_kick_monitor())
+            print(f"Skipping {channel} - no chatroom ID")
+    
+    if not tasks:
+        print("No channels to monitor!")
+        return
+    
+    print(f"Monitoring {len(tasks)} channels...")
+    await asyncio.gather(*tasks, return_exceptions=True)
