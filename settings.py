@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import List, Dict
 from dotenv import load_dotenv
 
 
@@ -26,16 +26,9 @@ class DiscordSettings:
 
 
 @dataclass
-class DatabaseSettings:
-    url: Optional[str]
-    anon_key: Optional[str]
-
-
-@dataclass
 class AppSettings:
     kick: KickSettings
     discord: DiscordSettings
-    database: DatabaseSettings
 
 
 def load_settings() -> AppSettings:
@@ -115,9 +108,4 @@ def load_settings() -> AppSettings:
         webhook_url=os.getenv("DISCORD_WEBHOOK_URL", ""),
     )
 
-    database = DatabaseSettings(
-        url=os.getenv("SUPABASE_URL"),
-        anon_key=os.getenv("SUPABASE_ANON_KEY"),
-    )
-
-    return AppSettings(kick=kick, discord=discord, database=database)
+    return AppSettings(kick=kick, discord=discord)

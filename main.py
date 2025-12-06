@@ -60,8 +60,6 @@ async def run_kick_monitor(session: aiohttp.ClientSession) -> None:
         pusher_app_key=settings.kick.pusher_app_key,
         pusher_cluster=settings.kick.pusher_cluster,
         user_agent=settings.kick.user_agent,
-        supabase_url=settings.database.url,
-        supabase_key=settings.database.anon_key,
     )
 
 

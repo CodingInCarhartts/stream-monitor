@@ -58,32 +58,6 @@ async def send_discord_webhook(
         print(f"Discord error: {e}")
 
 
-async def save_to_supabase(
-    session: aiohttp.ClientSession,
-    url: str,
-    key: str,
-    data: dict,
-) -> None:
-    """Save notification to Supabase - fire and forget."""
-    if not url or not key:
-        return
-    try:
-        async with session.post(
-            f"{url}/rest/v1/kick_notifications",
-            json=data,
-            headers={
-                "apikey": key,
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            if resp.status != 201:
-                print(f"Supabase error: {resp.status}")
-    except Exception as e:
-        print(f"Supabase error: {e}")
-
-
 async def monitor_channel(
     session: aiohttp.ClientSession,
     channel_name: str,
@@ -91,8 +65,6 @@ async def monitor_channel(
     target_username: str,
     webhook_url: str,
     pusher_url: str,
-    supabase_url: Optional[str] = None,
-    supabase_key: Optional[str] = None,
 ) -> None:
     """
     Monitor a single Kick channel for mentions and replies.
@@ -173,7 +145,6 @@ async def monitor_channel(
                             continue
                         
                         notification_type = "Reply" if is_reply else "Mention"
-                        timestamp = msg.get("created_at", "")
                         
                         # Create Discord embed
                         embed = {
@@ -200,20 +171,6 @@ async def monitor_channel(
                         
                         # Fire and forget - don't wait
                         asyncio.create_task(send_discord_webhook(session, webhook_url, embed))
-                        
-                        # Optionally save to Supabase
-                        if supabase_url and supabase_key:
-                            db_data = {
-                                "platform": "Kick",
-                                "type": notification_type,
-                                "channel": channel_name,
-                                "username": username,
-                                "message": content,
-                                "timestamp": timestamp,
-                                "url": f"https://kick.com/{channel_name}",
-                            }
-                            asyncio.create_task(save_to_supabase(session, supabase_url, supabase_key, db_data))
-                        
                         print(f"[Kick] {notification_type} from {username} in {channel_name}")
                         
         except ConnectionClosed:
@@ -234,8 +191,6 @@ async def start_monitoring(
     pusher_app_key: str,
     pusher_cluster: str,
     user_agent: str,
-    supabase_url: Optional[str] = None,
-    supabase_key: Optional[str] = None,
 ) -> None:
     """Start monitoring all channels."""
     pusher_url = (
@@ -256,8 +211,6 @@ async def start_monitoring(
                     target_username=target_username,
                     webhook_url=webhook_url,
                     pusher_url=pusher_url,
-                    supabase_url=supabase_url,
-                    supabase_key=supabase_key,
                 )
             )
             tasks.append(task)
