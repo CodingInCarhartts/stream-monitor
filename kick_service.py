@@ -1,20 +1,14 @@
 import asyncio
-import gc
 import json
 from datetime import datetime
 from typing import Awaitable, Callable, Optional
-from collections import deque
 
 import aiohttp
 import websockets
 
 from core_models import Channel, Message, Notification
 from settings import KickSettings
-from resource_manager import (
-    CircuitBreaker,
-    BoundedMessageQueue,
-    WebSocketConnectionManager,
-)
+from resource_manager import WebSocketConnectionManager
 
 
 class KickChannelRepository:
@@ -58,8 +52,6 @@ class KickWebSocketClient:
         )
         # Resource management utilities - limit reconnections to prevent resource bloat
         self.ws_manager = WebSocketConnectionManager(max_reconnect_attempts=5)
-        # Bounded message queue to prevent memory accumulation
-        self.message_queue: dict[str, BoundedMessageQueue] = {}
 
     async def listen_channel(
         self,
@@ -68,9 +60,6 @@ class KickWebSocketClient:
     ) -> None:
         """Listen to channel with proper resource cleanup and error handling"""
         pusher_channel = f"chatrooms.{channel.id}.v2"
-        
-        # Initialize bounded queue for this channel
-        self.message_queue[channel.name] = BoundedMessageQueue(maxlen=500)
 
         async def connection_handler(websocket: websockets.WebSocketClientProtocol) -> None:
             """Handle WebSocket connection with timeout protection"""
@@ -93,9 +82,7 @@ class KickWebSocketClient:
                 max_backoff=60.0,
             )
         finally:
-            # Cleanup resources for this channel only
-            if channel.name in self.message_queue:
-                await self.message_queue[channel.name].clear()
+            pass  # Cleanup handled by ws_manager
 
     async def _run_loop(
         self,
@@ -202,9 +189,6 @@ class KickWebSocketClient:
             print(f"Handler timeout for {username} in {channel.name}")
         except Exception as e:
             print(f"Error handling message in {channel.name}: {e}")
-        finally:
-            # Aggressive garbage collection to prevent memory accumulation
-            gc.collect()
 
     def _get_message_type(self, msg_data: dict, content: str) -> str | None:
         if (

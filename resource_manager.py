@@ -158,42 +158,38 @@ class ExplicitTimeoutManager:
 
 class SessionPool:
     """
-    Manages a pool of aiohttp sessions with bounded lifecycle.
-    Ensures sessions are properly closed to prevent resource leaks.
+    Manages a single reusable aiohttp session with bounded lifecycle.
+    Uses lazy initialization and ensures proper cleanup.
     """
 
     def __init__(self, connector_limit: int = 100, timeout_seconds: float = 30.0):
         self.connector_limit = connector_limit
         self.timeout_seconds = timeout_seconds
-        self.sessions: list[Any] = []
-        self.lock = asyncio.Lock()
+        self._session: Optional[Any] = None
+        self._lock = asyncio.Lock()
+
+    async def _get_or_create_session(self) -> Any:
+        """Get existing session or create one if needed"""
+        if self._session is None or self._session.closed:
+            import aiohttp
+            timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
+            connector = aiohttp.TCPConnector(limit=self.connector_limit, limit_per_host=10)
+            self._session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        return self._session
 
     @asynccontextmanager
     async def get_session(self) -> AsyncIterator[Any]:
-        """Get a managed aiohttp session"""
-        import aiohttp
-
-        timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
-        connector = aiohttp.TCPConnector(limit=self.connector_limit)
-        session = aiohttp.ClientSession(connector=connector, timeout=timeout)
-
-        async with self.lock:
-            self.sessions.append(session)
-
-        try:
-            yield session
-        finally:
-            await session.close()
-            async with self.lock:
-                if session in self.sessions:
-                    self.sessions.remove(session)
+        """Get the shared aiohttp session"""
+        async with self._lock:
+            session = await self._get_or_create_session()
+        yield session
 
     async def cleanup_all(self) -> None:
-        """Close all sessions"""
-        async with self.lock:
-            for session in self.sessions:
-                await session.close()
-            self.sessions.clear()
+        """Close the session"""
+        async with self._lock:
+            if self._session and not self._session.closed:
+                await self._session.close()
+            self._session = None
 
 
 class WebSocketConnectionManager:

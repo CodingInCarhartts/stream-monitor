@@ -82,9 +82,9 @@ async def run_kick_monitor() -> None:
 
 
 async def gc_task():
-    """Periodically run garbage collection"""
+    """Periodically run garbage collection - run infrequently to avoid interference"""
     while True:
-        await asyncio.sleep(30)  # Every 30 seconds
+        await asyncio.sleep(300)  # Every 5 minutes
         gc.collect()
 
 
