@@ -18,8 +18,14 @@ discord_service: DiscordNotificationService | None = None
 db_service: DatabaseNotificationService | None = None
 task_manager = TaskManager()
 
+# Initialize services once at module level
+_settings = load_settings()
+_discord_service = DiscordNotificationService(_settings.discord)
+_db_service = DatabaseNotificationService(_settings.database)
+
 
 async def handle_notification(notification: Notification) -> None:
+<<<<<<< HEAD
     """Handle notification with proper error handling and resource cleanup"""
     if not discord_service or not db_service:
         return
@@ -32,6 +38,10 @@ async def handle_notification(notification: Notification) -> None:
             print("Discord notification send timeout, continuing...")
         except Exception as e:
             print(f"Discord notification error: {e}")
+=======
+    await _discord_service.send(notification)
+    await _db_service.save(notification)
+>>>>>>> 0255397 (perf: Optimize service initialization in `app.py` and reduce bot memory usage in `fps_renewal_bot.py` by disabling message caching and a cleanup task.)
 
         # Save to database with error handling
         try:
