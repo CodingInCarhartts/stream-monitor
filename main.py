@@ -1,6 +1,7 @@
 """
 Stream Monitor - Main Entry Point
 Monitors Kick chat channels for mentions/replies and sends Discord notifications.
+Also runs the FPS server renewal bot.
 """
 
 import asyncio
@@ -13,6 +14,7 @@ import aiohttp
 
 from settings import load_settings
 from kick_monitor import start_monitoring
+from fps_renewal_bot import main as run_fps_bot
 
 
 async def log_memory() -> None:
@@ -65,7 +67,7 @@ async def run_kick_monitor(session: aiohttp.ClientSession) -> None:
 
 async def main() -> None:
     """Main entry point."""
-    print("Starting Stream Monitor...")
+    print("Starting Stream Monitor and FPS Renewal Bot...")
     
     # Setup signal handlers for graceful shutdown
     loop = asyncio.get_running_loop()
@@ -79,12 +81,13 @@ async def main() -> None:
         loop.add_signal_handler(sig, shutdown)
     
     async with managed_session() as session:
-        # Start memory logging and kick monitor
+        # Start all tasks
         memory_task = asyncio.create_task(log_memory())
         monitor_task = asyncio.create_task(run_kick_monitor(session))
+        fps_bot_task = asyncio.create_task(run_fps_bot())
         
         try:
-            await asyncio.gather(memory_task, monitor_task)
+            await asyncio.gather(memory_task, monitor_task, fps_bot_task)
         except asyncio.CancelledError:
             print("Tasks cancelled, shutting down...")
         except Exception as e:
@@ -92,6 +95,7 @@ async def main() -> None:
         finally:
             memory_task.cancel()
             monitor_task.cancel()
+            fps_bot_task.cancel()
             print("Cleanup complete")
 
 
@@ -103,3 +107,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Fatal error: {e}")
         sys.exit(1)
+
